@@ -1,0 +1,21 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[package]
+name = "libui-ng-sys"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+build = "build.rs"
+
+[features]
+darwin-ext = []
+unix-ext = []
+windows-ext = []
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.59"
+git2 = "0.14"
