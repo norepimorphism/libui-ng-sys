@@ -215,6 +215,8 @@ fn bindgen_builder_with_clang_args(mut builder: bindgen::Builder) -> bindgen::Bu
 fn bindgen_builder_with_unix_clang_args(builder: bindgen::Builder) -> bindgen::Builder {
     let gtk = pkg_config::Config::new()
         .atleast_version("3.10")
+        .print_system_cflags(true)
+        .print_system_libs(true)
         .probe("gtk+-3.0")
         .unwrap();
 
