@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{env, io, path::{Path, PathBuf}};
+use std::{env, fmt, io, path::{Path, PathBuf}};
 
 #[derive(Debug)]
 enum Error {
@@ -16,10 +16,11 @@ fn main() -> Result<(), Error> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let libui_dir = out_dir.join("libui-ng");
 
-    let repo = clone_libui(libui_dir.as_path()).map_err(Error::Git)?;
-    update_libui(&repo).map_err(Error::Git)?;
-    build_libui(libui_dir.as_path())?;
-    gen_bindings(out_dir.as_path(), libui_dir.as_path())?;
+    let repo = clone_libui(&libui_dir)?;
+    update_libui(&repo)?;
+    setup_libui(&libui_dir)?;
+    build_libui(&libui_dir)?;
+    gen_bindings(&out_dir, &libui_dir)?;
 
     println!(
         "cargo:rustc-link-search={}",
@@ -27,19 +28,12 @@ fn main() -> Result<(), Error> {
     );
     println!("cargo:rustc-link-lib=static=ui");
 
-    //#[cfg(feature = "unix-ext")]
-    //#[cfg(target_family = "unix")]
-    {
-        println!("cargo:rustc-link-lib=glib");
-        println!("cargo:rustc-link-lib=gtk");
-    }
-
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
 }
 
-fn clone_libui(libui_dir: &Path) -> Result<git2::Repository, git2::Error> {
+fn clone_libui(libui_dir: &Path) -> Result<git2::Repository, Error> {
     static REPO_URL: &str = "https://github.com/libui-ng/libui-ng.git";
 
     match git2::Repository::clone_recurse(REPO_URL, libui_dir) {
@@ -49,6 +43,7 @@ fn clone_libui(libui_dir: &Path) -> Result<git2::Repository, git2::Error> {
         }
         Err(e) => Err(e),
     }
+    .map_err(Error::Git)
 }
 
 fn git_error_is_already_exists(e: &git2::Error) -> bool {
@@ -56,25 +51,32 @@ fn git_error_is_already_exists(e: &git2::Error) -> bool {
     (e.class() == git2::ErrorClass::Invalid)
 }
 
-fn update_libui(repo: &git2::Repository) -> Result<(), git2::Error> {
+fn update_libui(repo: &git2::Repository) -> Result<(), Error> {
     const HEAD: &str = "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d";
 
-    repo.set_head_detached(git2::Oid::from_str(HEAD).unwrap())?;
-    repo.checkout_head(None)?;
-
-    Ok(())
+    repo.set_head_detached(git2::Oid::from_str(HEAD).unwrap()).map_err(Error::Git)?;
+    repo.checkout_head(None).map_err(Error::Git)
 }
 
-fn build_libui(libui_dir: &Path) -> Result<(), Error> {
+fn setup_libui(libui_dir: &Path) -> Result<(), Error> {
+    static LIBRARY_KIND: &str = if cfg!(feature = "static-libui") {
+        "static"
+    } else {
+        "shared"
+    };
+
     std::process::Command::new("meson")
-        .args(["setup", "--default-library=static"])
+        .arg("setup")
+        .arg(format!("--default-library={}", LIBRARY_KIND))
         .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
         .arg("build")
         .current_dir(libui_dir)
         .output()
         .map(|_| ())
-        .map_err(Error::Meson)?;
+        .map_err(Error::Meson)
+}
 
+fn build_libui(libui_dir: &Path) -> Result<(), Error> {
     std::process::Command::new("ninja")
         .args(["-C", "build"])
         .current_dir(libui_dir)
@@ -118,56 +120,149 @@ enum WrapperHeader {
     },
 }
 
+impl WrapperHeader {
+    fn contents(&self, libui_dir: &Path) -> String {
+        self
+            .as_include_stmts(libui_dir)
+            .into_iter()
+            .map(|stmt| stmt.to_string())
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
+    fn as_include_stmts(&self, libui_dir: &Path) -> Vec<IncludeStmt> {
+        let mut stmts = vec![
+            IncludeStmt {
+                kind: IncludeStmtKind::Local,
+                arg: libui_dir.join(format!("ui.h")).display().to_string(),
+            }
+        ];
+
+        if let WrapperHeader::Ext { name, dep } = *self {
+            stmts.push(IncludeStmt {
+                kind: IncludeStmtKind::System,
+                arg: dep.to_string(),
+            });
+            stmts.push(IncludeStmt {
+                kind: IncludeStmtKind::Local,
+                arg: libui_dir.join(format!("ui_{}.h", name)).display().to_string(),
+            });
+        }
+
+        stmts
+    }
+}
+
+struct IncludeStmt {
+    kind: IncludeStmtKind,
+    arg: String,
+}
+
+enum IncludeStmtKind {
+    System,
+    Local,
+}
+
+impl fmt::Display for IncludeStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "#include {}",
+            match self.kind {
+                IncludeStmtKind::System => format!("<{}>", self.arg),
+                IncludeStmtKind::Local => format!("\"{}\"", self.arg),
+            },
+        )
+    }
+}
+
 fn gen_bindings_for_wrapper(
     out_dir: &Path,
     libui_dir: &Path,
     wrapper: &WrapperHeader,
 ) -> Result<(), Error> {
-    static LIBUI_REGEX: &str = "ui(?:[A-Z][a-z0-9]*)*";
-
-    let mut header_contents = format!(
-        "#include \"{}\"\n",
-        libui_dir.join(format!("ui.h")).display(),
-    );
-
-    if let WrapperHeader::Ext { name, dep } = wrapper {
-        header_contents.push_str(format!("#include <{}>\n", dep).as_str());
-        header_contents.push_str(
-            format!(
-                "#include \"{}\"\n",
-                libui_dir.join(format!("ui_{}.h", name)).display(),
-            )
-            .as_str()
-        );
-    }
-
-    let mut builder = bindgen::builder()
-        .header_contents("wrapper.h", header_contents.as_str())
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-        .allowlist_function(LIBUI_REGEX)
-        .allowlist_type(LIBUI_REGEX)
-        .allowlist_var(LIBUI_REGEX);
-
-    #[cfg(feature = "unix-ext")]
-    #[cfg(target_family = "unix")]
-    {
-        builder = builder
-            .clang_args(["-I", "/usr/include/atk-1.0"])
-            .clang_args(["-I", "/usr/include/cairo"])
-            .clang_args(["-I", "/usr/include/gdk-pixbuf-2.0"])
-            .clang_args(["-I", "/usr/include/glib-2.0"])
-            .clang_args(["-I", "/usr/lib/glib-2.0/include"])
-            .clang_args(["-I", "/usr/include/graphene-1.0"])
-            .clang_args(["-I", "/usr/lib/graphene-1.0/include"])
-            .clang_args(["-I", "/usr/include/gtk-3.0"])
-            .clang_args(["-I", "/usr/include/harfbuzz"])
-            .clang_args(["-I", "/usr/include/pango-1.0"]);
-    }
+    let header_contents = wrapper.contents(libui_dir);
+    let mut builder = create_bindgen_builder(&header_contents);
+    builder = bindgen_builder_with_clang_args(builder);
 
     if matches!(wrapper, WrapperHeader::Ext { .. }) {
         builder = builder.blocklist_file(".*ui\\.h");
     }
 
+    consume_bindgen_builder(builder, wrapper, out_dir)
+}
+
+fn create_bindgen_builder(header_contents: &str) -> bindgen::Builder {
+    static LIBUI_REGEX: &str = "ui(?:[A-Z][a-z0-9]*)*";
+
+    bindgen::builder()
+        .header_contents("wrapper.h", &header_contents)
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .allowlist_function(LIBUI_REGEX)
+        .allowlist_type(LIBUI_REGEX)
+        .allowlist_var(LIBUI_REGEX)
+}
+
+fn bindgen_builder_with_clang_args(mut builder: bindgen::Builder) -> bindgen::Builder {
+    #[cfg(feature = "unix-ext")]
+    {
+        builder = bindgen_builder_with_unix_clang_args(builder);
+    }
+
+    builder
+}
+
+fn bindgen_builder_with_unix_clang_args(builder: bindgen::Builder) -> bindgen::Builder {
+    let gtk = pkg_config::Config::new()
+        .atleast_version("3.10")
+        .probe("gtk+-3.0")
+        .unwrap();
+
+    bindgen_builder_with_clang_args_for_pkg(builder, gtk)
+}
+
+fn bindgen_builder_with_clang_args_for_pkg(
+    builder: bindgen::Builder,
+    pkg: pkg_config::Library,
+) -> bindgen::Builder {
+    let defines = pkg
+        .defines
+        .into_iter()
+        .flat_map(|(k, v)| {
+            vec![
+                "-D".to_string(),
+                format!("{}{}", k, v.map(|it| format!("={}", it)).unwrap_or_default()),
+            ]
+        });
+
+    let includes = pkg
+        .include_paths
+        .into_iter()
+        .flat_map(|path| {
+            vec![
+                "-I".to_string(),
+                path.display().to_string(),
+            ]
+        });
+
+    for path in pkg.link_paths {
+        println!("cargo:rustc-link-search={}", path.display());
+    }
+
+    for lib in pkg.libs {
+        println!("cargo:rustc-link-lib={}", lib);
+    }
+
+    builder
+        .clang_args(defines)
+        .clang_args(includes)
+}
+
+fn consume_bindgen_builder(
+    builder: bindgen::Builder,
+    wrapper: &WrapperHeader,
+    out_dir: &Path,
+) -> Result<(), Error> {
     builder
         .generate()
         .unwrap()

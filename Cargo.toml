@@ -10,6 +10,7 @@ license = "MPL-2.0"
 build = "build.rs"
 
 [features]
+static-libui = []
 darwin-ext = []
 unix-ext = []
 windows-ext = []
@@ -19,3 +20,4 @@ windows-ext = []
 [build-dependencies]
 bindgen = "0.59"
 git2 = "0.14"
+pkg-config = "0.3"
