@@ -23,6 +23,14 @@ See the below sections for additional feature-specific prerequisites.
 
 ### windows-ext
 
+## Version Mapping
+
+libui-ng-sys does not necessarily pull the most recent version of libui-ng; rather, each libui-ng-sys version is tied to a specific commit of libui-ng.
+
+| libui-ng-sys Version | libui-ng Commit Hash                     |
+| -------------------- | ---------------------------------------- |
+| 0.1.0                | 42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d |
+
 ## TODO
 
 * Accept previously-fetched libui-ng repo
