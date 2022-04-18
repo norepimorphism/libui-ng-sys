@@ -2,7 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{env, fmt, io, path::{Path, PathBuf}};
+use std::{collections::HashMap, env, fmt, io, path::{Path, PathBuf}};
+
+#[static_init::dynamic]
+static LIBUI_VERSION_MAP: HashMap<&'static str, &'static str> = HashMap::from_iter([
+    ("0.1.0", "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d"),
+]);
 
 #[derive(Debug)]
 enum Error {
@@ -52,9 +57,10 @@ fn git_error_is_already_exists(e: &git2::Error) -> bool {
 }
 
 fn update_libui(repo: &git2::Repository) -> Result<(), Error> {
-    const HEAD: &str = "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d";
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    let new_head = LIBUI_VERSION_MAP.get(version.as_str()).unwrap();
 
-    repo.set_head_detached(git2::Oid::from_str(HEAD).unwrap()).map_err(Error::Git)?;
+    repo.set_head_detached(git2::Oid::from_str(new_head).unwrap()).map_err(Error::Git)?;
     repo.checkout_head(None).map_err(Error::Git)
 }
 
