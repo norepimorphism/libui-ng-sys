@@ -26,7 +26,7 @@ fn main() -> Result<(), Error> {
         "cargo:rustc-link-search={}",
         libui_dir.join("build/meson-out/").display(),
     );
-    println!("cargo:rustc-link-lib=static=ui");
+    println!("cargo:rustc-link-lib=ui");
 
     println!("cargo:rerun-if-changed=build.rs");
 
