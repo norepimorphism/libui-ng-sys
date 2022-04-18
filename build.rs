@@ -26,6 +26,14 @@ fn main() -> Result<(), Error> {
         libui_dir.join("build/meson-out/").display(),
     );
     println!("cargo:rustc-link-lib=static=ui");
+
+    //#[cfg(feature = "unix-ext")]
+    //#[cfg(target_family = "unix")]
+    {
+        println!("cargo:rustc-link-lib=glib");
+        println!("cargo:rustc-link-lib=gtk");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
