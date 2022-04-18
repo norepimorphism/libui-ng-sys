@@ -17,4 +17,3 @@ See [libui-ng build requirements](https://github.com/libui-ng/libui-ng#build-req
 
 * Accept previously-fetched libui-ng repo
 * Accept previously-compiled libui-ng
-* Implement platform-specific API bindings
