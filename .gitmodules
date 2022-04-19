@@ -1,0 +1,9 @@
+[submodule "dep/ninja"]
+	path = dep/ninja
+	url = https://github.com/ninja-build/ninja.git
+[submodule "dep/libui-ng"]
+	path = dep/libui-ng
+	url = https://github.com/libui-ng/libui-ng.git
+[submodule "dep/meson"]
+	path = dep/meson
+	url = https://github.com/mesonbuild/meson.git

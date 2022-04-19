@@ -2,34 +2,61 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{collections::HashMap, env, fmt, io, path::{Path, PathBuf}};
+use std::{env, fmt, path::{Path, PathBuf}};
 
-#[static_init::dynamic]
-static LIBUI_VERSION_MAP: HashMap<&'static str, &'static str> = HashMap::from_iter([
-    ("0.1.0", "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d"),
-]);
+struct Dep {
+    dir: PathBuf,
+    head: &'static str,
+}
+
+impl Dep {
+    fn libui() -> Self {
+        Dep {
+            dir: PathBuf::from("dep/libui-ng"),
+            head: "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d",
+        }
+    }
+
+    fn meson() -> Self {
+        Dep {
+            dir: PathBuf::from("dep/meson"),
+            head: "09ad4e28f1a59ab3d87de6f36540a108e836cfe5",
+        }
+    }
+
+    fn ninja() -> Self {
+        Dep {
+            dir: PathBuf::from("dep/ninja"),
+            head: "25cdbae0ee1270a5c8dd6ba67696e29ad8076919",
+        }
+    }
+}
 
 #[derive(Debug)]
-enum Error {
+pub enum Error {
+    Repo(repo::Error),
+    Meson(meson::Error),
+    Ninja(ninja::Error),
     Bindgen,
-    Git(git2::Error),
-    Meson(io::Error),
-    Ninja(io::Error),
 }
 
 fn main() -> Result<(), Error> {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let libui_dir = out_dir.join("libui-ng");
+    let libui = Dep::libui();
+    let meson = Dep::meson();
+    let ninja = Dep::ninja();
 
-    let repo = clone_libui(&libui_dir)?;
-    update_libui(&repo)?;
-    setup_libui(&libui_dir)?;
-    build_libui(&libui_dir)?;
-    gen_bindings(&out_dir, &libui_dir)?;
+    libui.update()?;
+    meson.update()?;
+    ninja.update()?;
+
+    libui::build(&libui.dir, &meson.dir, &ninja.dir)?;
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    gen_bindings(&libui.dir, &out_dir)?;
 
     println!(
         "cargo:rustc-link-search={}",
-        libui_dir.join("build/meson-out/").display(),
+        libui.dir.join("build/meson-out/").display(),
     );
     println!("cargo:rustc-link-lib=ui");
 
@@ -38,60 +65,103 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn clone_libui(libui_dir: &Path) -> Result<git2::Repository, Error> {
-    static REPO_URL: &str = "https://github.com/libui-ng/libui-ng.git";
-
-    match git2::Repository::clone_recurse(REPO_URL, libui_dir) {
-        Ok(repo) => Ok(repo),
-        Err(e) if git_error_is_already_exists(&e) => {
-            git2::Repository::open(libui_dir)
-        }
-        Err(e) => Err(e),
+impl Dep {
+    fn update(&self) -> Result<(), Error> {
+        repo::update(&self.dir, self.head).map_err(Error::Repo)
     }
-    .map_err(Error::Git)
 }
 
-fn git_error_is_already_exists(e: &git2::Error) -> bool {
-    (e.code() == git2::ErrorCode::Exists) &&
-    (e.class() == git2::ErrorClass::Invalid)
+mod repo {
+    use std::path::Path;
+
+    #[derive(Debug)]
+    pub enum Error {
+        Open(git2::Error),
+        CreateOid(git2::Error),
+        SetHead(git2::Error),
+        CheckoutHead(git2::Error),
+    }
+
+    pub fn update(repo_dir: &Path, new_head: &str) -> Result<(), Error> {
+        let repo = git2::Repository::open(repo_dir).map_err(Error::Open)?;
+        let new_head = git2::Oid::from_str(new_head).map_err(Error::CreateOid)?;
+        repo.set_head_detached(new_head).map_err(Error::SetHead)?;
+        repo.checkout_head(None).map_err(Error::CheckoutHead)
+    }
 }
 
-fn update_libui(repo: &git2::Repository) -> Result<(), Error> {
-    let version = env::var("CARGO_PKG_VERSION").unwrap();
-    let new_head = LIBUI_VERSION_MAP.get(version.as_str()).unwrap();
+mod libui {
+    use crate::Error;
+    use std::path::Path;
 
-    repo.set_head_detached(git2::Oid::from_str(new_head).unwrap()).map_err(Error::Git)?;
-    repo.checkout_head(None).map_err(Error::Git)
+    pub fn build(libui_dir: &Path, meson_dir: &Path, ninja_dir: &Path) -> Result<(), Error> {
+        crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::Meson)?;
+        crate::ninja::build(ninja_dir).map_err(Error::Ninja)?;
+        crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::Ninja)
+    }
 }
 
-fn setup_libui(libui_dir: &Path) -> Result<(), Error> {
-    static LIBRARY_KIND: &str = if cfg!(feature = "static-libui") {
-        "static"
-    } else {
-        "shared"
-    };
+mod meson {
+    use std::{env, io, path::Path};
 
-    std::process::Command::new("meson")
-        .arg("setup")
-        .arg(format!("--default-library={}", LIBRARY_KIND))
-        .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
-        .arg("build")
-        .current_dir(libui_dir)
-        .output()
-        .map(|_| ())
-        .map_err(Error::Meson)
+    #[derive(Debug)]
+    pub enum Error {
+        SetupLibui(io::Error),
+    }
+
+    pub fn setup_libui(meson_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
+        static LIBRARY_KIND: &str = if cfg!(feature = "static-libui") {
+            "static"
+        } else {
+            "shared"
+        };
+
+        std::process::Command::new("python")
+            .arg(meson_dir.join("meson.py"))
+            .arg("setup")
+            .arg(format!("--default-library={}", LIBRARY_KIND))
+            .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
+            .arg(libui_dir.join("build"))
+            .output()
+            .map(|_| ())
+            .map_err(Error::SetupLibui)
+    }
 }
 
-fn build_libui(libui_dir: &Path) -> Result<(), Error> {
-    std::process::Command::new("ninja")
-        .args(["-C", "build"])
-        .current_dir(libui_dir)
-        .output()
-        .map(|_| ())
-        .map_err(Error::Ninja)
+mod ninja {
+    use std::{fs, io, path::Path};
+
+    #[derive(Debug)]
+    pub enum Error {
+        Build(io::Error),
+        BuildLibui(io::Error),
+    }
+
+    pub fn build(ninja_dir: &Path) -> Result<(), Error> {
+        if ninja_dir.join("ninja").exists() {
+            return Ok(());
+        }
+
+        std::process::Command::new("python")
+            .arg("configure.py")
+            .arg("--bootstrap")
+            .current_dir(ninja_dir)
+            .output()
+            .map(|_| ())
+            .map_err(Error::Build)
+    }
+
+    pub fn build_libui(ninja_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
+        std::process::Command::new(ninja_dir.join("ninja"))
+            .arg("-C")
+            .arg(libui_dir.join("build"))
+            .output()
+            .map(|_| ())
+            .map_err(Error::BuildLibui)
+    }
 }
 
-fn gen_bindings(out_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
+fn gen_bindings(libui_dir: &Path, out_dir: &Path) -> Result<(), Error> {
     static WRAPPERS: &[WrapperHeader] = &[
         WrapperHeader::Main,
         #[cfg(feature = "darwin-ext")]

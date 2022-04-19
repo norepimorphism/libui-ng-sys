@@ -4,10 +4,7 @@ Rust bindings for [libui-ng](https://github.com/libui-ng/libui-ng).
 
 ## Prerequisites
 
-See [libui-ng build requirements](https://github.com/libui-ng/libui-ng#build-requirements) for more information.
-
-* [Meson](https://mesonbuild.com/) &ge; v0.48.0
-* [Ninja](https://ninja-build.org/) &ge; v1.8.2
+* [Python](https://www.python.org/)
 
 If a platform-specific API feature is enabled, the following are also required:
 
@@ -25,11 +22,21 @@ See the below sections for additional feature-specific prerequisites.
 
 ## Version Mapping
 
-libui-ng-sys does not necessarily pull the most recent version of libui-ng; rather, each libui-ng-sys version is tied to a specific commit of libui-ng.
+libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. Because Cargo cannot bind these non-Rust build dependencies to specific SemVer versions as it would for Rust crates, the libui-ng-sys build script downgrades the Git submodules to known compatible versions. These are documented below for each version of libui-ng-sys.
 
-| libui-ng-sys Version | libui-ng Commit Hash                     |
-| -------------------- | ---------------------------------------- |
-| 0.1.0                | 42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d |
+### 0.2.0
+
+| Dependency | Commit Hash                              |
+| ---------- | ---------------------------------------- |
+| libui-ng   | 42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d |
+| Meson      | 09ad4e28f1a59ab3d87de6f36540a108e836cfe5 |
+| Ninja      | 25cdbae0ee1270a5c8dd6ba67696e29ad8076919 |
+
+### 0.1.0
+
+| Dependency | Commit Hash                              |
+| ---------- | ---------------------------------------- |
+| libui-ng   | 42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d |
 
 ## TODO
 
