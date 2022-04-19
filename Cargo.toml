@@ -5,15 +5,14 @@
 [package]
 name = "libui-ng-sys"
 version = "0.1.0"
+authors = ["norepimorphism <norepi@protonmail.com>"]
 edition = "2021"
+description = "Bindings for libui-ng"
+repository = "https://github.com/norepimorphism/libui-ng-sys"
 license = "MPL-2.0"
+categories = ["external-ffi-bindings", "gui", "os"]
 build = "build.rs"
-
-[features]
-static-libui = []
-darwin-ext = []
-unix-ext = []
-windows-ext = []
+links = "ui"
 
 [dependencies]
 
@@ -22,3 +21,9 @@ bindgen = "0.59"
 git2 = "0.14"
 pkg-config = "0.3"
 static_init = "1.0"
+
+[features]
+static-libui = []
+darwin-ext = []
+unix-ext = []
+windows-ext = []
