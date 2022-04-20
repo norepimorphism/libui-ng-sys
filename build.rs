@@ -2,100 +2,34 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{env, path::PathBuf};
-
-struct Dep {
-    dir: PathBuf,
-    head: &'static str,
-}
-
-impl Dep {
-    fn libui() -> Self {
-        Dep {
-            dir: PathBuf::from("dep/libui-ng"),
-            head: "42641e3d6bfb2c49ca4cc3b03d8ae277d9841a5d",
-        }
-    }
-
-    fn meson() -> Self {
-        Dep {
-            dir: PathBuf::from("dep/meson"),
-            head: "09ad4e28f1a59ab3d87de6f36540a108e836cfe5",
-        }
-    }
-
-    fn ninja() -> Self {
-        Dep {
-            dir: PathBuf::from("dep/ninja"),
-            head: "25cdbae0ee1270a5c8dd6ba67696e29ad8076919",
-        }
-    }
-}
+use std::{env, path::{Path, PathBuf}};
 
 #[derive(Debug)]
 pub enum Error {
-    Repo(repo::Error),
     Meson(meson::Error),
     Ninja(ninja::Error),
     Bindings(bindings::Error),
 }
 
 fn main() -> Result<(), Error> {
-    let libui = Dep::libui();
-    let meson = Dep::meson();
-    let ninja = Dep::ninja();
+    let libui_dir = Path::new("dep/libui-ng");
+    let meson_dir = Path::new("dep/meson");
+    let ninja_dir = Path::new("dep/ninja");
 
-    libui.update()?;
-    meson.update()?;
-    ninja.update()?;
-
-    libui::build(&libui.dir, &meson.dir, &ninja.dir)?;
+    libui::build(libui_dir, meson_dir, ninja_dir)?;
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings::gen(&libui.dir, &out_dir).map_err(Error::Bindings)?;
+    bindings::gen(libui_dir, &out_dir).map_err(Error::Bindings)?;
 
     println!(
         "cargo:rustc-link-search={}",
-        libui.dir.join("build/meson-out/").display(),
+        libui_dir.join("build/meson-out/").display(),
     );
     println!("cargo:rustc-link-lib=ui");
 
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
-}
-
-impl Dep {
-    fn update(&self) -> Result<(), Error> {
-        repo::update(&self.dir, self.head).map_err(Error::Repo)
-    }
-}
-
-mod repo {
-    use std::path::Path;
-
-    #[derive(Debug)]
-    pub enum Error {
-        Open(git2::Error),
-        ReadSubmodules(git2::Error),
-        UpdateSubmodule(git2::Error),
-        CreateOid(git2::Error),
-        SetHead(git2::Error),
-        CheckoutHead(git2::Error),
-    }
-
-    pub fn update(repo_dir: &Path, new_head: &str) -> Result<(), Error> {
-        let repo = git2::Repository::open(repo_dir).map_err(Error::Open)?;
-
-        let submods = repo.submodules().map_err(Error::ReadSubmodules)?;
-        for mut submod in submods {
-            submod.update(true, None).map_err(Error::UpdateSubmodule)?;
-        }
-
-        let new_head = git2::Oid::from_str(new_head).map_err(Error::CreateOid)?;
-        repo.set_head_detached(new_head).map_err(Error::SetHead)?;
-        repo.checkout_head(None).map_err(Error::CheckoutHead)
-    }
 }
 
 mod libui {

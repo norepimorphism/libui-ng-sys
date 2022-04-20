@@ -18,7 +18,6 @@ links = "ui"
 
 [build-dependencies]
 bindgen = "0.59"
-git2 = "0.14"
 pkg-config = "0.3"
 
 [features]
