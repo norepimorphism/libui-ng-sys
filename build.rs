@@ -77,6 +77,8 @@ mod repo {
     #[derive(Debug)]
     pub enum Error {
         Open(git2::Error),
+        ReadSubmodules(git2::Error),
+        UpdateSubmodule(git2::Error),
         CreateOid(git2::Error),
         SetHead(git2::Error),
         CheckoutHead(git2::Error),
@@ -84,6 +86,12 @@ mod repo {
 
     pub fn update(repo_dir: &Path, new_head: &str) -> Result<(), Error> {
         let repo = git2::Repository::open(repo_dir).map_err(Error::Open)?;
+
+        let submods = repo.submodules().map_err(Error::ReadSubmodules)?;
+        for mut submod in submods {
+            submod.update(true, None).map_err(Error::UpdateSubmodule)?;
+        }
+
         let new_head = git2::Oid::from_str(new_head).map_err(Error::CreateOid)?;
         repo.set_head_detached(new_head).map_err(Error::SetHead)?;
         repo.checkout_head(None).map_err(Error::CheckoutHead)
