@@ -22,7 +22,7 @@ See the below sections for additional feature-specific prerequisites.
 
 ## Version Mapping
 
-libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. Because Cargo cannot bind these non-Rust build dependencies to specific SemVer versions as it would for Rust crates, the libui-ng-sys build script downgrades the Git submodules to known compatible versions. These are documented below for each version of libui-ng-sys.
+libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. The latest commit hashes of the submodules are documented below for each version of libui-ng-sys.
 
 ### 0.2.0
 
