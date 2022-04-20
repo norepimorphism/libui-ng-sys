@@ -2,11 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{env, fs, io, path::{Path, PathBuf}};
+use std::{env, path::PathBuf};
 
 #[derive(Debug)]
 pub enum Error {
-    SyncNinja(anyhow::Error),
+    Sync(anyhow::Error),
     Meson(meson::Error),
     Ninja(ninja::Error),
     Bindings(bindings::Error),
@@ -15,27 +15,16 @@ pub enum Error {
 fn main() -> Result<(), Error> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    let libui_dir = Path::new("dep/libui-ng");
-    let meson_dir = Path::new("dep/meson");
+    let libui_dir = out_dir.join("libui-ng");
+    let meson_dir = out_dir.join("meson");
     let ninja_dir = out_dir.join("ninja");
 
-    struct FakeProgressInfo;
+    dep::sync("libui-ng", &libui_dir).map_err(Error::Sync)?;
+    dep::sync("meson", &meson_dir).map_err(Error::Sync)?;
+    dep::sync("ninja", &ninja_dir).map_err(Error::Sync)?;
 
-    impl rusync::progress::ProgressInfo for FakeProgressInfo {}
-
-    rusync::Syncer::new(
-        Path::new("dep/ninja"),
-        &ninja_dir,
-        rusync::SyncOptions {
-            preserve_permissions: true,
-        },
-        Box::new(FakeProgressInfo),
-    )
-    .sync()
-    .map_err(Error::SyncNinja)?;
-
-    libui::build(libui_dir, meson_dir, &ninja_dir)?;
-    bindings::gen(libui_dir, &out_dir).map_err(Error::Bindings)?;
+    libui::build(&libui_dir, &meson_dir, &ninja_dir)?;
+    bindings::gen(&libui_dir, &out_dir).map_err(Error::Bindings)?;
 
     println!(
         "cargo:rustc-link-search={}",
@@ -46,6 +35,27 @@ fn main() -> Result<(), Error> {
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
+}
+
+mod dep {
+    use std::path::Path;
+
+    pub fn sync(name: &str, to: &Path) -> Result<(), anyhow::Error> {
+        rusync::Syncer::new(
+            &Path::new("dep").join(name),
+            to,
+            rusync::SyncOptions {
+                preserve_permissions: true,
+            },
+            Box::new(FakeProgressInfo),
+        )
+        .sync()
+        .map(|_| ())
+    }
+
+    struct FakeProgressInfo;
+
+    impl rusync::progress::ProgressInfo for FakeProgressInfo {}
 }
 
 mod libui {
