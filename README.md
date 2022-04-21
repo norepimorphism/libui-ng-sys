@@ -24,7 +24,7 @@ See the below sections for additional feature-specific prerequisites.
 
 libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. The latest commit hashes of the submodules are documented below for each version of libui-ng-sys.
 
-### 0.2.0
+### 0.2.0&ndash;0.2.1
 
 | Dependency | Commit Hash                              |
 | ---------- | ---------------------------------------- |
