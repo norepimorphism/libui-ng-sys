@@ -6,10 +6,9 @@ use std::{env, path::PathBuf};
 
 #[derive(Debug)]
 pub enum Error {
-    Sync(anyhow::Error),
-    Meson(meson::Error),
-    Ninja(ninja::Error),
-    Bindings(bindings::Error),
+    SyncDep(anyhow::Error),
+    BuildLibui(libui::Error),
+    GenBindings(bindings::Error),
 }
 
 fn main() -> Result<(), Error> {
@@ -19,12 +18,12 @@ fn main() -> Result<(), Error> {
     let meson_dir = out_dir.join("meson");
     let ninja_dir = out_dir.join("ninja");
 
-    dep::sync("libui-ng", &libui_dir).map_err(Error::Sync)?;
-    dep::sync("meson", &meson_dir).map_err(Error::Sync)?;
-    dep::sync("ninja", &ninja_dir).map_err(Error::Sync)?;
+    dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
+    dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
+    dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
 
-    libui::build(&libui_dir, &meson_dir, &ninja_dir)?;
-    bindings::gen(&libui_dir, &out_dir).map_err(Error::Bindings)?;
+    libui::build(&libui_dir, &meson_dir, &ninja_dir).map_err(Error::BuildLibui)?;
+    bindings::gen(&libui_dir, &out_dir).map_err(Error::GenBindings)?;
 
     println!(
         "cargo:rustc-link-search={}",
@@ -59,22 +58,29 @@ mod dep {
 }
 
 mod libui {
-    use crate::Error;
     use std::path::Path;
 
+    #[derive(Debug)]
+    pub enum Error {
+        SetupLibui(crate::meson::Error),
+        BuildNinja(crate::ninja::Error),
+        BuildLibui(crate::ninja::Error),
+    }
+
     pub fn build(libui_dir: &Path, meson_dir: &Path, ninja_dir: &Path) -> Result<(), Error> {
-        crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::Meson)?;
-        crate::ninja::build(ninja_dir).map_err(Error::Ninja)?;
-        crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::Ninja)
+        crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::SetupLibui)?;
+        crate::ninja::build(ninja_dir).map_err(Error::BuildNinja)?;
+        crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibui)
     }
 }
 
 mod meson {
-    use std::{env, io, path::Path};
+    use std::{env, io, path::Path, process};
 
     #[derive(Debug)]
     pub enum Error {
-        SetupLibui(io::Error),
+        RunPython(io::Error),
+        Python { out: process::Output },
     }
 
     pub fn setup_libui(meson_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
@@ -84,25 +90,31 @@ mod meson {
             "shared"
         };
 
-        std::process::Command::new("python")
+        let out = process::Command::new("python")
             .arg(meson_dir.join("meson.py"))
             .arg("setup")
             .arg(format!("--default-library={}", LIBRARY_KIND))
             .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
             .arg(libui_dir.join("build"))
+            .arg(libui_dir)
             .output()
-            .map(|_| ())
-            .map_err(Error::SetupLibui)
+            .map_err(Error::RunPython)?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Python { out })
+        }
     }
 }
 
 mod ninja {
-    use std::{io, path::Path};
+    use std::{io, path::Path, process};
 
     #[derive(Debug)]
     pub enum Error {
-        Build(io::Error),
-        BuildLibui(io::Error),
+        RunPython(io::Error),
+        Python { out: process::Output },
     }
 
     pub fn build(ninja_dir: &Path) -> Result<(), Error> {
@@ -110,22 +122,32 @@ mod ninja {
             return Ok(());
         }
 
-        std::process::Command::new("python")
+        let out = std::process::Command::new("python")
             .arg("configure.py")
             .arg("--bootstrap")
             .current_dir(ninja_dir)
             .output()
-            .map(|_| ())
-            .map_err(Error::Build)
+            .map_err(Error::RunPython)?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Python { out })
+        }
     }
 
     pub fn build_libui(ninja_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
-        std::process::Command::new(ninja_dir.join("ninja"))
-            .arg("-C")
-            .arg(libui_dir.join("build"))
+        let out = std::process::Command::new(ninja_dir.join("ninja"))
+            .args(["-C", "build"])
+            .current_dir(libui_dir)
             .output()
-            .map(|_| ())
-            .map_err(Error::BuildLibui)
+            .map_err(Error::RunPython)?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Python { out })
+        }
     }
 }
 
