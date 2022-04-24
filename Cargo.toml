@@ -4,7 +4,7 @@
 
 [package]
 name = "libui-ng-sys"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["norepimorphism <norepi@protonmail.com>"]
 edition = "2021"
 description = "Bindings for libui-ng"
@@ -33,3 +33,4 @@ bindgen = "0.59"
 build_cfg = "1.1"
 pkg-config = "0.3"
 rusync = "0.7"
+# winres = "0.1"
