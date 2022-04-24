@@ -11,7 +11,6 @@ use std::{env, path::PathBuf};
 #[derive(Debug)]
 pub enum Error {
     /// Failed to [sync](`dep::sync`) dependencies.
-    #[cfg(feature = "build")]
     SyncDep(anyhow::Error),
     /// Failed to build *libui*.
     #[cfg(feature = "build")]
@@ -28,18 +27,18 @@ fn main() -> Result<(), Error> {
     let meson_dir = out_dir.join("meson");
     let ninja_dir = out_dir.join("ninja");
 
+    // Cargo will prevent this crate from being published if the build script modifies files
+    // outside `$OUT_DIR` during its operation. To work around this for the purpose of building
+    // *libui*, we copy all non-Rust build dependencies to `$OUT_DIR`.
+    dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
+    dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
+
+    if build_cfg!(target_os = "linux") {
+        dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
+    }
+
     #[cfg(feature = "build")]
     {
-        // Cargo will prevent this crate from being published if the build script modifies files
-        // outside `$OUT_DIR` during its operation. To work around this for the purpose of building
-        // *libui*, we copy all non-Rust build dependencies to `$OUT_DIR`.
-        dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
-        dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
-
-        if build_cfg!(target_os = "linux") {
-            dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
-        }
-
         libui::build(&libui_dir, &meson_dir, &ninja_dir).map_err(Error::BuildLibui)?;
 
         // Tell Cargo where to find the copy of *libui* that we just built.
@@ -52,14 +51,13 @@ fn main() -> Result<(), Error> {
         // to link statically. Consequently, as static libraries *do not* contain information on the
         // shared objects that must be imported, we must tell Cargo (and, by extension, the dynamic
         // linker) which shared objects we need.
-        #[cfg(not(feature = "static-deps"))]
         import_dylibs();
     }
 
     // Instruct Cargo to link to *libui*.
     println!(
         "cargo:rustc-link-lib={}=ui",
-        if cfg!(feature = "static-deps") {
+        if cfg!(feature = "build") {
             "static"
         } else {
             "dylib"
@@ -74,7 +72,7 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(not(feature = "static-libs"))]
+#[cfg(feature = "build")]
 fn import_dylibs() {
     macro_rules! dyn_link {
         ($($name:tt)*) => {
@@ -85,10 +83,8 @@ fn import_dylibs() {
     }
 
     if build_cfg!(target_os = "linux") {
-        // See `dep/libui-ng/unix/meson.build`.
-        dyn_link! {
-
-        };
+        // While unintuitive, we don't actually need to specify any shared objects here---the
+        // `pkg_config` crate will do that automatically in [`bindings::ClangArgs::new_unix`].
     } else if build_cfg!(target_os = "windows") {
         // See `dep/libui-ng/windows/meson.build`.
         dyn_link! {
@@ -111,7 +107,6 @@ fn import_dylibs() {
     }
 }
 
-#[cfg(feature = "build")]
 mod dep {
     use std::path::Path;
 
