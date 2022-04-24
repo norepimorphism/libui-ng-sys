@@ -192,6 +192,7 @@ mod meson {
             .arg("--buildtype=release")
             .arg(format!("--optimization={}", optimization()))
             .arg(format!("--backend={}", backend()))
+            .arg("-Db_vscrt=from_buildtype")
             .arg(libui_dir.join("build"))
             .arg(libui_dir)
             .output()
