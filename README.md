@@ -6,21 +6,31 @@ Rust bindings for [libui-ng](https://github.com/libui-ng/libui-ng).
 
 ## Prerequisites
 
-* [Python](https://www.python.org/) &ge; v3.4
+If the `build` feature is enabled, external dependencies may be required. The following sections list requirements for different values of `$CARGO_CFG_TARGET_OS`.
 
-If a platform-specific API feature is enabled, the following are also required:
-
-* [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/)
-
-See the below sections for additional feature-specific prerequisites.
-
-### unix-ext
+### Linux
 
 * [GTK3](https://gtk.org) &ge; v3.10.0
+* [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/)
+* [Python](https://www.python.org/) &ge; v3.4
+
+### Windows
+
+The following Visual Studio components are required:
+
+* MSVC C++ x64/x86 build tools
+* C++ Clang Compiler for Windows
+* Windows 10 or 11 SDK
+
+These may be acquired from the [Visual Studio Installer](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022).
+
+### Other
+
+Other targets are not currently supported.
 
 ## Version Mapping
 
-libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. The latest commit hashes of the submodules are documented below for each version of libui-ng-sys.
+When the `build` feature is enabled, libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and possibly [Ninja](https://github.com/ninja-build/ninja) as dependencies, but Rust crates do not exist for them yet. To work around this, these are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. The latest commit hashes of the submodules are documented below for each version of libui-ng-sys.
 
 ### 0.2.0&ndash;0.2.2
 

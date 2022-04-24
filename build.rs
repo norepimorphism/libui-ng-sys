@@ -35,7 +35,10 @@ fn main() -> Result<(), Error> {
         // *libui*, we copy all non-Rust build dependencies to `$OUT_DIR`.
         dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
         dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
-        dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
+
+        if build_cfg!(target_os = "linux") {
+            dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
+        }
 
         libui::build(&libui_dir, &meson_dir, &ninja_dir).map_err(Error::BuildLibui)?;
 
@@ -90,15 +93,21 @@ mod libui {
         SetupLibui(crate::meson::Error),
         /// Failed to build Ninja.
         BuildNinja(crate::ninja::Error),
-        /// Failed to build *libui*.
-        BuildLibui(crate::ninja::Error),
+        /// Failed to build *libui* with Ninja.
+        BuildLibuiWithNinja(crate::ninja::Error),
+        /// Failed to build *libui* with Meson.
+        BuildLibuiWithMeson(crate::meson::Error),
     }
 
     /// Builds *libui*.
     pub fn build(libui_dir: &Path, meson_dir: &Path, ninja_dir: &Path) -> Result<(), Error> {
         crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::SetupLibui)?;
-        crate::ninja::build(ninja_dir).map_err(Error::BuildNinja)?;
-        crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibui)
+        if build_cfg!(target_os = "linux") {
+            crate::ninja::build(ninja_dir).map_err(Error::BuildNinja)?;
+            crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibuiWithNinja)
+        } else {
+            crate::meson::build_libui(meson_dir, libui_dir).map_err(Error::BuildLibuiWithMeson)
+        }
     }
 }
 
@@ -122,8 +131,36 @@ mod meson {
             .arg("setup")
             .arg(format!("--default-library=static"))
             .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
+            .arg(format!("--backend={}", backend()))
             .arg(libui_dir.join("build"))
             .arg(libui_dir)
+            .output()
+            .map_err(Error::RunPython)?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Python { out })
+        }
+    }
+
+    fn backend() -> &'static str {
+        if build_cfg!(target_os = "macos") {
+            todo!()
+        } else if build_cfg!(target_os = "linux") {
+            "ninja"
+        } else if build_cfg!(target_os = "windows") {
+            "vs"
+        } else {
+            unimplemented!("Unsupported target OS");
+        }
+    }
+
+    pub fn build_libui(meson_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
+        let out = process::Command::new("python")
+            .arg(meson_dir.join("meson.py"))
+            .arg("compile")
+            .current_dir(libui_dir.join("build"))
             .output()
             .map_err(Error::RunPython)?;
 
@@ -290,12 +327,13 @@ mod bindings {
                 .allowlist_type(LIBUI_REGEX)
                 .allowlist_var(LIBUI_REGEX);
 
+            // Note: Virtually every wrapper except that for "ui.h" should blocklist "ui.h".
             if self.blocklists_main {
                 builder = builder.blocklist_file(".*ui\\.h");
             }
 
             builder
-                .clang_args(ClangArgs::new().map(ClangArgs::as_args).unwrap_or_default())
+                .clang_args(ClangArgs::new().as_args())
                 .generate()
                 .map_err(|_| Error::Generate)?
                 .write_to_file(out_dir.join(format!("{}.rs", self.filename)))
@@ -348,15 +386,15 @@ mod bindings {
     }
 
     impl ClangArgs {
-        fn new() -> Option<Self> {
+        fn new() -> Self {
             if build_cfg!(target_os = "macos") {
-                Some(Self::new_darwin())
+                Self::new_darwin()
             } else if build_cfg!(target_os = "linux") {
-                Some(Self::new_unix())
+                Self::new_unix()
             } else if build_cfg!(target_os = "windows") {
-                Some(Self::new_windows())
+                Self::new_windows()
             } else {
-                None
+                unimplemented!("Unsupported target OS");
             }
         }
 
@@ -397,7 +435,6 @@ mod bindings {
         }
 
         fn new_windows() -> Self {
-            // TODO
             Self {
                 defines: Vec::new(),
                 include_paths: Vec::new(),
