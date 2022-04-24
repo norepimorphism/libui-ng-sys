@@ -14,16 +14,16 @@ categories = ["external-ffi-bindings", "gui", "os"]
 build = "build.rs"
 links = "ui"
 
+[features]
+build = []
+default = ["build"]
+
 [dependencies]
 
 [build-dependencies]
 anyhow = "1.0"
 bindgen = "0.59"
-pkg-config = "0.3"
 rusync = "0.7"
 
-[features]
-static-libui = []
-darwin-ext = []
-unix-ext = []
-windows-ext = []
+[target.'cfg(target_os = "linux")'.build-dependencies]
+pkg-config = "0.3"

@@ -9,32 +9,27 @@
 )]
 
 macro_rules! include_bindings {
-    () => {
-        include_bindings!("", "");
-    };
     ($name:literal) => {
-        include_bindings!("-", $name);
-    };
-    ($sep:literal, $name:literal) => {
-        include!(concat!(env!("OUT_DIR"), "/bindings", $sep, $name, ".rs"));
+        include!(concat!(env!("OUT_DIR"), "/", $name, ".rs"));
     };
 }
 
-include_bindings!();
+include_bindings!("bindings");
+include_bindings!("bindings-control-sigs");
 
 pub mod platform {
     macro_rules! def_platform {
-        ($mod_name:tt, $header_name:literal, $feature_name:literal $(,)?) => {
-            #[cfg(feature = $feature_name)]
-            pub mod $mod_name {
+        ($mod:tt, $header:literal, $os:literal $(,)?) => {
+            #[cfg(target_os = $os)]
+            pub mod $mod {
                 use crate::*;
 
-                include_bindings!($header_name);
+                include_bindings!($header);
             }
         };
     }
 
-    def_platform!(darwin, "darwin", "darwin-ext");
-    def_platform!(unix, "unix", "unix-ext");
-    def_platform!(windows, "windows", "windows-ext");
+    def_platform!(darwin, "bindings-darwin", "macos");
+    def_platform!(unix, "bindings-unix", "linux");
+    def_platform!(windows, "bindings-windows", "windows");
 }
