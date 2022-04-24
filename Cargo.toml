@@ -4,7 +4,7 @@
 
 [package]
 name = "libui-ng-sys"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["norepimorphism <norepi@protonmail.com>"]
 edition = "2021"
 description = "Bindings for libui-ng"

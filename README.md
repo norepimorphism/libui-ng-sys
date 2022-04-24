@@ -1,10 +1,12 @@
 # libui-ng-sys
 
+![Crates.io](https://img.shields.io/crates/v/libui-ng-sys)
+
 Rust bindings for [libui-ng](https://github.com/libui-ng/libui-ng).
 
 ## Prerequisites
 
-* [Python](https://www.python.org/)
+* [Python](https://www.python.org/) &ge; v3.4
 
 If a platform-specific API feature is enabled, the following are also required:
 
@@ -12,19 +14,15 @@ If a platform-specific API feature is enabled, the following are also required:
 
 See the below sections for additional feature-specific prerequisites.
 
-### darwin-ext
-
 ### unix-ext
 
-* [GTK3](https://gtk.org) &ge; v3.10
-
-### windows-ext
+* [GTK3](https://gtk.org) &ge; v3.10.0
 
 ## Version Mapping
 
 libui-ng-sys requires libui-ng, [Meson](https://github.com/mesonbuild/meson), and [Ninja](https://github.com/ninja-build/ninja) as build dependencies, but Rust crates do not exist for them yet. To work around this, these dependencies are included as Git submodules, and Ninja in particular&mdash;being a C++ project&mdash;is automatically built in the libui-ng-sys build script. The latest commit hashes of the submodules are documented below for each version of libui-ng-sys.
 
-### 0.2.0&ndash;0.2.1
+### 0.2.0&ndash;0.2.2
 
 | Dependency | Commit Hash                              |
 | ---------- | ---------------------------------------- |
