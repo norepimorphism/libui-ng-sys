@@ -2,19 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#[macro_use]
+extern crate build_cfg;
+
 use std::{env, path::PathBuf};
 
 /// The error type returned by [`main`].
 #[derive(Debug)]
 pub enum Error {
     /// Failed to [sync](`dep::sync`) dependencies.
+    #[cfg(feature = "build")]
     SyncDep(anyhow::Error),
     /// Failed to build *libui*.
+    #[cfg(feature = "build")]
     BuildLibui(libui::Error),
     /// Failed to generate bindings.
     GenBindings(bindings::Error),
 }
 
+#[build_cfg_main]
 fn main() -> Result<(), Error> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
@@ -194,12 +200,16 @@ mod bindings {
     pub fn generate(libui_dir: &Path, out_dir: &Path) -> Result<(), Error> {
         Header::main().generate(libui_dir, out_dir)?;
         Header::control_sigs().generate(libui_dir, out_dir)?;
-        #[cfg(target_os = "macos")]
-        Header::darwin().generate(libui_dir, out_dir)?;
-        #[cfg(target_os = "linux")]
-        Header::unix().generate(libui_dir, out_dir)?;
-        #[cfg(target_os = "windows")]
-        Header::windows().generate(libui_dir, out_dir)?;
+
+        if build_cfg!(target_os = "macos") {
+            Header::darwin().generate(libui_dir, out_dir)?;
+        }
+        if build_cfg!(target_os = "linux") {
+            Header::unix().generate(libui_dir, out_dir)?;
+        }
+        if build_cfg!(target_os = "windows") {
+            Header::windows().generate(libui_dir, out_dir)?;
+        }
 
         Ok(())
     }
@@ -237,17 +247,14 @@ mod bindings {
             }
         }
 
-        #[cfg(target_os = "macos")]
         fn darwin() -> Self {
             Self::ext("darwin", "Cocoa/Cocoa.h")
         }
 
-        #[cfg(target_os = "linux")]
         fn unix() -> Self {
             Self::ext("unix", "gtk/gtk.h")
         }
 
-        #[cfg(target_os = "windows")]
         fn windows() -> Self {
             Self::ext("windows", "windows.h")
         }
@@ -342,11 +349,11 @@ mod bindings {
 
     impl ClangArgs {
         fn new() -> Option<Self> {
-            if cfg!(target_os = "macos") {
+            if build_cfg!(target_os = "macos") {
                 Some(Self::new_darwin())
-            } else if cfg!(target_os = "linux") {
+            } else if build_cfg!(target_os = "linux") {
                 Some(Self::new_unix())
-            } else if cfg!(target_os = "windows") {
+            } else if build_cfg!(target_os = "windows") {
                 Some(Self::new_windows())
             } else {
                 None

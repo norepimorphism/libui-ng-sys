@@ -23,7 +23,6 @@ default = ["build"]
 [build-dependencies]
 anyhow = "1.0"
 bindgen = "0.59"
-rusync = "0.7"
-
-[target.'cfg(target_os = "linux")'.build-dependencies]
+build_cfg = "1.1"
 pkg-config = "0.3"
+rusync = "0.7"
