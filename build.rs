@@ -52,6 +52,27 @@ fn main() -> Result<(), Error> {
     // Instruct Cargo to link---either statically or dynamically---to *libui*.
     println!("cargo:rustc-link-lib=ui");
 
+    if build_cfg!(target_os = "windows") {
+        macro_rules! dyn_link {
+            ($($name:tt)*) => {
+                $(
+                    println!("cargo:rustc-link-lib=dylib={}", stringify!($name));
+                )*
+            };
+        }
+
+        dyn_link! {
+            comctl32
+            d2d1
+            dwrite
+            gdi32
+            ole32
+            ucrtd
+            user32
+            windowscodecs
+        };
+    }
+
     bindings::generate(&libui_dir, &out_dir).map_err(Error::GenBindings)?;
 
     // Recompile *libui-ng-sys* whenever this build script is modified.
@@ -84,7 +105,7 @@ mod dep {
 
 #[cfg(feature = "build")]
 mod libui {
-    use std::path::Path;
+    use std::{io, path::Path};
 
     /// The error type returned by *libui* functions.
     #[derive(Debug)]
@@ -97,6 +118,10 @@ mod libui {
         BuildLibuiWithNinja(crate::ninja::Error),
         /// Failed to build *libui* with Meson.
         BuildLibuiWithMeson(crate::meson::Error),
+        /// Failed to rename "libui.a" to "ui.lib".
+        ///
+        /// This error *should* only occur when `$CARGO_CFG_TARGET_OS` is `windows`.
+        RenameLibui(io::Error),
     }
 
     /// Builds *libui*.
@@ -104,10 +129,20 @@ mod libui {
         crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::SetupLibui)?;
         if build_cfg!(target_os = "linux") {
             crate::ninja::build(ninja_dir).map_err(Error::BuildNinja)?;
-            crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibuiWithNinja)
+            crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibuiWithNinja)?;
         } else {
-            crate::meson::build_libui(meson_dir, libui_dir).map_err(Error::BuildLibuiWithMeson)
+            crate::meson::build_libui(meson_dir, libui_dir).map_err(Error::BuildLibuiWithMeson)?;
         }
+
+        // Meson unconditionally names the library "libui.a", which prevents MSVC's `link.exe` from
+        // finding it; we must manually rename it to "ui.lib".
+        if build_cfg!(target_os = "windows") {
+            let build_dir = libui_dir.join("build/meson-out");
+            std::fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))
+                .map_err(Error::RenameLibui)?;
+        }
+
+        Ok(())
     }
 }
 
