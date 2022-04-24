@@ -98,7 +98,6 @@ fn import_dylibs() {
             ole32
             oleacc
             oleaut32
-            ucrtd
             user32
             uuid
             uxtheme
@@ -189,8 +188,9 @@ mod meson {
         let out = process::Command::new("python")
             .arg(meson_dir.join("meson.py"))
             .arg("setup")
-            .arg(format!("--default-library=static"))
-            .arg(format!("--buildtype={}", env::var("PROFILE").unwrap()))
+            .arg("--default-library=static")
+            .arg("--buildtype=release")
+            .arg(format!("--optimization={}", optimization()))
             .arg(format!("--backend={}", backend()))
             .arg(libui_dir.join("build"))
             .arg(libui_dir)
@@ -213,6 +213,19 @@ mod meson {
             "vs"
         } else {
             unimplemented!("Unsupported target OS");
+        }
+    }
+
+    fn is_debug() -> bool {
+        !matches!(env::var("DEBUG").as_deref(), Ok("0" | "false"))
+    }
+
+    fn optimization() -> String {
+        let level = env::var("OPT_LEVEL").expect("$OPT_LEVEL is unset");
+        match level.as_str() {
+            // Meson doesn't support "-Oz"; we'll try the next-closest option.
+            "z" => String::from("s"),
+            _ => level,
         }
     }
 
