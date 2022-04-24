@@ -17,6 +17,7 @@ links = "ui"
 [features]
 build = []
 default = ["build"]
+static-deps = ["build"]
 
 [package.metadata.docs.rs]
 no-default-features = true

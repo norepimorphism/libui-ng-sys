@@ -47,31 +47,24 @@ fn main() -> Result<(), Error> {
             "cargo:rustc-link-search={}",
             libui_dir.join("build/meson-out/").display(),
         );
+
+        // Because we are building *libui* from scratch and placing it in `$OUT_DIR`, it makes sense
+        // to link statically. Consequently, as static libraries *do not* contain information on the
+        // shared objects that must be imported, we must tell Cargo (and, by extension, the dynamic
+        // linker) which shared objects we need.
+        #[cfg(not(feature = "static-deps"))]
+        import_dylibs();
     }
 
-    // Instruct Cargo to link---either statically or dynamically---to *libui*.
-    println!("cargo:rustc-link-lib=ui");
-
-    if build_cfg!(target_os = "windows") {
-        macro_rules! dyn_link {
-            ($($name:tt)*) => {
-                $(
-                    println!("cargo:rustc-link-lib=dylib={}", stringify!($name));
-                )*
-            };
-        }
-
-        dyn_link! {
-            comctl32
-            d2d1
-            dwrite
-            gdi32
-            ole32
-            ucrtd
-            user32
-            windowscodecs
-        };
-    }
+    // Instruct Cargo to link to *libui*.
+    println!(
+        "cargo:rustc-link-lib={}=ui",
+        if cfg!(feature = "static-deps") {
+            "static"
+        } else {
+            "dylib"
+        },
+    );
 
     bindings::generate(&libui_dir, &out_dir).map_err(Error::GenBindings)?;
 
@@ -79,6 +72,43 @@ fn main() -> Result<(), Error> {
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
+}
+
+#[cfg(not(feature = "static-libs"))]
+fn import_dylibs() {
+    macro_rules! dyn_link {
+        ($($name:tt)*) => {
+            $(
+                println!("cargo:rustc-link-lib=dylib={}", stringify!($name));
+            )*
+        };
+    }
+
+    if build_cfg!(target_os = "linux") {
+        // See `dep/libui-ng/unix/meson.build`.
+        dyn_link! {
+
+        };
+    } else if build_cfg!(target_os = "windows") {
+        // See `dep/libui-ng/windows/meson.build`.
+        dyn_link! {
+            comctl32
+            comdlg32
+            d2d1
+            dwrite
+            gdi32
+            kernel32
+            msimg32
+            ole32
+            oleacc
+            oleaut32
+            ucrtd
+            user32
+            uuid
+            uxtheme
+            windowscodecs
+        };
+    }
 }
 
 #[cfg(feature = "build")]
