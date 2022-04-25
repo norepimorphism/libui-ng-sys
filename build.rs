@@ -466,6 +466,7 @@ mod bindings {
 
             builder
                 .clang_args(ClangArgs::new().as_args())
+                .layout_tests(false)
                 .generate()
                 .map_err(|_| Error::Generate)?
                 .write_to_file(out_dir.join(format!("{}.rs", self.filename)))
