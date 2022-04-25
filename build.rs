@@ -114,9 +114,10 @@ fn import_dylibs() {
 }
 
 fn include_winres(libui_dir: &Path) -> io::Result<()> {
+    let windows_dir = libui_dir.join("windows");
     winres::WindowsResource::new()
-        .set_manifest_file(&format!("{}", libui_dir.join("windows/libui.manifest").display()))
-        .set_resource_file(&format!("{}", libui_dir.join("windows/resources.rc").display()))
+        .set_manifest_file(&windows_dir.join("libui.manifest").display().to_string())
+        .set_resource_file(&windows_dir.join("resources.rc").display().to_string())
         .compile()
 }
 
@@ -142,7 +143,7 @@ mod dep {
 }
 
 mod build {
-    use std::{env, io, path::Path, process};
+    use std::{env, fs, io, path::Path, process};
 
     /// The error type returned by [`Backend`] functions.
     #[derive(Debug)]
@@ -151,9 +152,11 @@ mod build {
         SetupLibui(PythonError),
         /// Failed to build Ninja.
         BuildNinja(PythonError),
-        /// Failed to build *libui*.
-        BuildLibui(PythonError),
-        /// Failed to rename "libui.a" to "ui.lib".
+        /// Failed to rename `ninja` to `ninja.exe`.
+        RenameNinja(io::Error),
+        /// Failed to compile *libui*.
+        CompileLibui(PythonError),
+        /// Failed to rename `libui.a` to `ui.lib`.
         ///
         /// This error *should* only occur when `$CARGO_CFG_TARGET_OS` is `windows`.
         RenameLibui(io::Error),
@@ -204,22 +207,57 @@ mod build {
             meson_dir: &Path,
             ninja_dir: &Path,
         ) -> Result<(), Error> {
-            self.setup_libui(libui_dir, meson_dir).map_err(Error::SetupLibui)?;
-            self.build_libui_once_setup(libui_dir, meson_dir, ninja_dir)?;
+            if let Self::Ninja = self {
+                // This must precede setting up *libui* as Meson requires Ninja even in the
+                // configuration phase.
+                Self::build_ninja(ninja_dir).map_err(Error::BuildNinja)?;
+                Self::rename_ninja(ninja_dir).map_err(Error::RenameNinja)?;
+            }
 
-            // Meson unconditionally names the library "libui.a", which prevents MSVC's `link.exe`
-            // from finding it; we must manually rename it to "ui.lib".
-            if let Self::Msvc = self {
-                let build_dir = libui_dir.join("build/meson-out");
-                std::fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))
-                    .map_err(Error::RenameLibui)?;
+            self.setup_libui(libui_dir, meson_dir, ninja_dir).map_err(Error::SetupLibui)?;
+            self.compile_libui(libui_dir, meson_dir, ninja_dir)
+                .map_err(Error::CompileLibui)?;
+            self.rename_libui(libui_dir).map_err(Error::RenameNinja)?;
+
+            Ok(())
+        }
+
+        /// Builds Ninja.
+        fn build_ninja(ninja_dir: &Path) -> Result<(), PythonError> {
+            if ninja_dir.join("ninja.exe").exists() {
+                // We'll give the benefit of the doubt that `ninja.exe` is actually a complete,
+                // working binary and not just, e.g., an empty file.
+                return Ok(());
+            }
+
+            Self::run_python(|cmd| {
+                cmd
+                    .arg("configure.py")
+                    .arg("--bootstrap")
+                    .current_dir(ninja_dir);
+            })
+        }
+
+        fn rename_ninja(ninja_dir: &Path) -> Result<(), io::Error> {
+            // On Linux and macOS hosts, the binary is named `ninja`, while on Windows hosts, the
+            // binary is named `ninja.exe`. Furthermore, Windows detects executables by file
+            // extension whereas Unix systems do it by filesystem permissions. For these reasons, we
+            // normalize the Ninja executable name to `ninja.exe` for consistency.
+            let ninja_path = ninja_dir.join("ninja");
+            if ninja_path.exists() {
+                fs::rename(ninja_path, ninja_dir.join("ninja.exe"))?;
             }
 
             Ok(())
         }
 
         /// Prepares *libui* to be built.
-        fn setup_libui(&self, libui_dir: &Path, meson_dir: &Path) -> Result<(), PythonError> {
+        fn setup_libui(
+            &self,
+            libui_dir: &Path,
+            meson_dir: &Path,
+            ninja_dir: &Path,
+        ) -> Result<(), PythonError> {
             Self::run_python(|cmd| {
                 cmd
                     .arg(meson_dir.join("meson.py"))
@@ -232,7 +270,10 @@ mod build {
                     // backends; Meson will simply ignore it if MSVC isn't the selected backend.
                     .arg("-Db_vscrt=from_buildtype")
                     .arg(libui_dir.join("build"))
-                    .arg(libui_dir);
+                    .arg(libui_dir)
+                    // It's OK that this env. variable is hardcoded; Meson will ignore it if Ninja
+                    // isn't the selected backend.
+                    .env("NINJA", ninja_dir.join("ninja.exe"));
             })
         }
 
@@ -259,41 +300,18 @@ mod build {
             }
         }
 
-        fn build_libui_once_setup(
+        fn compile_libui(
             &self,
             libui_dir: &Path,
             meson_dir: &Path,
             ninja_dir: &Path,
-        ) -> Result<(), Error> {
-            if let Self::Ninja = self {
-                Self::build_ninja(ninja_dir).map_err(Error::BuildNinja)?;
-            }
-
+        ) -> Result<(), PythonError> {
             Self::run_python(|cmd| {
                 cmd
                     .arg(meson_dir.join("meson.py"))
                     .arg("compile")
-                    // It's OK that this env. variable is hardcoded; Meson will ignore it if Ninja
-                    // isn't the selected backend.
-                    .env("NINJA", ninja_dir.join("ninja"))
-                    .current_dir(libui_dir.join("build"));
-            })
-            .map_err(Error::BuildLibui)
-        }
-
-        /// Builds Ninja.
-        fn build_ninja(ninja_dir: &Path) -> Result<(), PythonError> {
-            if ninja_dir.join("ninja").exists() {
-                // We'll give the benefit of the doubt that `ninja` is actually a complete, working
-                // binary and not just, e.g., an empty file.
-                return Ok(());
-            }
-
-            Self::run_python(|cmd| {
-                cmd
-                    .arg("configure.py")
-                    .arg("--bootstrap")
-                    .current_dir(ninja_dir);
+                    .arg(format!("-C={}", libui_dir.join("build").display()))
+                    .env("NINJA", ninja_dir.join("ninja.exe"));
             })
         }
 
@@ -307,6 +325,17 @@ mod build {
             } else {
                 Err(PythonError::Python { out })
             }
+        }
+
+        fn rename_libui(&self, libui_dir: &Path) -> Result<(), io::Error> {
+            // Meson unconditionally names the library "libui.a", which prevents MSVC's `link.exe`
+            // from finding it; we must manually rename it to "ui.lib".
+            if let Self::Msvc = self {
+                let build_dir = libui_dir.join("build/meson-out");
+                fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))?;
+            }
+
+            Ok(())
         }
     }
 }
