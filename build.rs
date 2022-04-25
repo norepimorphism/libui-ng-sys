@@ -5,7 +5,7 @@
 #[macro_use]
 extern crate build_cfg;
 
-use std::{env, path::PathBuf};
+use std::{env, io, path::{Path, PathBuf}};
 
 /// The error type returned by [`main`].
 #[derive(Debug)]
@@ -14,15 +14,15 @@ pub enum Error {
     SyncDep(anyhow::Error),
     /// Failed to build *libui*.
     #[cfg(feature = "build")]
-    BuildLibui(libui::Error),
-    /// Failed to generate bindings.
+    BuildLibui(build::Error),
+    IncludeWinres(io::Error),
+    /// Failed to generate bindings to *libui*.
     GenBindings(bindings::Error),
 }
 
 #[build_cfg_main]
 fn main() -> Result<(), Error> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-
     let libui_dir = out_dir.join("libui-ng");
     let meson_dir = out_dir.join("meson");
     let ninja_dir = out_dir.join("ninja");
@@ -31,15 +31,18 @@ fn main() -> Result<(), Error> {
     // outside `$OUT_DIR` during its operation. To work around this for the purpose of building
     // *libui*, we copy all non-Rust build dependencies to `$OUT_DIR`.
     dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
-    dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
-
-    if build_cfg!(target_os = "linux") {
-        dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
-    }
 
     #[cfg(feature = "build")]
     {
-        libui::build(&libui_dir, &meson_dir, &ninja_dir).map_err(Error::BuildLibui)?;
+        let backend = build::Backend::default();
+
+        dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
+        // Ninja only needs to be synced if it's selected as a build backend.
+        if let build::Backend::Ninja = backend {
+            dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
+        }
+
+        backend.build_libui(&libui_dir, &meson_dir, &ninja_dir).map_err(Error::BuildLibui)?;
 
         // Tell Cargo where to find the copy of *libui* that we just built.
         println!(
@@ -52,6 +55,10 @@ fn main() -> Result<(), Error> {
         // shared objects that must be imported, we must tell Cargo (and, by extension, the dynamic
         // linker) which shared objects we need.
         import_dylibs();
+
+        if build_cfg!(target_os = "windows") {
+            include_winres(&libui_dir).map_err(Error::IncludeWinres)?;
+        }
     }
 
     // Instruct Cargo to link to *libui*.
@@ -84,7 +91,7 @@ fn import_dylibs() {
 
     if build_cfg!(target_os = "linux") {
         // While unintuitive, we don't actually need to specify any shared objects here---the
-        // `pkg_config` crate will do that automatically in [`bindings::ClangArgs::new_unix`].
+        // `pkg_config` crate will do that automatically in [`bindings::ClangArgs::new_linux`].
     } else if build_cfg!(target_os = "windows") {
         // See `dep/libui-ng/windows/meson.build`.
         dyn_link! {
@@ -104,6 +111,13 @@ fn import_dylibs() {
             windowscodecs
         };
     }
+}
+
+fn include_winres(libui_dir: &Path) -> io::Result<()> {
+    winres::WindowsResource::new()
+        .set_manifest_file(&format!("{}", libui_dir.join("windows/libui.manifest").display()))
+        .set_resource_file(&format!("{}", libui_dir.join("windows/resources.rc").display()))
+        .compile()
 }
 
 mod dep {
@@ -127,170 +141,172 @@ mod dep {
     impl rusync::progress::ProgressInfo for FakeProgressInfo {}
 }
 
-#[cfg(feature = "build")]
-mod libui {
-    use std::{io, path::Path};
+mod build {
+    use std::{env, io, path::Path, process};
 
-    /// The error type returned by *libui* functions.
+    /// The error type returned by [`Backend`] functions.
     #[derive(Debug)]
     pub enum Error {
         /// Failed to setup *libui*.
-        SetupLibui(crate::meson::Error),
+        SetupLibui(PythonError),
         /// Failed to build Ninja.
-        BuildNinja(crate::ninja::Error),
-        /// Failed to build *libui* with Ninja.
-        BuildLibuiWithNinja(crate::ninja::Error),
-        /// Failed to build *libui* with Meson.
-        BuildLibuiWithMeson(crate::meson::Error),
+        BuildNinja(PythonError),
+        /// Failed to build *libui*.
+        BuildLibui(PythonError),
         /// Failed to rename "libui.a" to "ui.lib".
         ///
         /// This error *should* only occur when `$CARGO_CFG_TARGET_OS` is `windows`.
         RenameLibui(io::Error),
     }
 
-    /// Builds *libui*.
-    pub fn build(libui_dir: &Path, meson_dir: &Path, ninja_dir: &Path) -> Result<(), Error> {
-        crate::meson::setup_libui(meson_dir, libui_dir).map_err(Error::SetupLibui)?;
-        if build_cfg!(target_os = "linux") {
-            crate::ninja::build(ninja_dir).map_err(Error::BuildNinja)?;
-            crate::ninja::build_libui(ninja_dir, libui_dir).map_err(Error::BuildLibuiWithNinja)?;
-        } else {
-            crate::meson::build_libui(meson_dir, libui_dir).map_err(Error::BuildLibuiWithMeson)?;
-        }
-
-        // Meson unconditionally names the library "libui.a", which prevents MSVC's `link.exe` from
-        // finding it; we must manually rename it to "ui.lib".
-        if build_cfg!(target_os = "windows") {
-            let build_dir = libui_dir.join("build/meson-out");
-            std::fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))
-                .map_err(Error::RenameLibui)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "build")]
-mod meson {
-    use std::{env, io, path::Path, process};
-
-    /// The error type returned by *meson* functions.
     #[derive(Debug)]
-    pub enum Error {
+    pub enum PythonError {
         /// Failed to run Python.
         RunPython(io::Error),
         /// The process run by Python failed.
         Python { out: process::Output },
     }
 
-    /// Prepares *libui* to be built.
-    pub fn setup_libui(meson_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
-        let out = process::Command::new("python")
-            .arg(meson_dir.join("meson.py"))
-            .arg("setup")
-            .arg("--default-library=static")
-            .arg("--buildtype=release")
-            .arg(format!("--optimization={}", optimization()))
-            .arg(format!("--backend={}", backend()))
-            .arg("-Db_vscrt=from_buildtype")
-            .arg(libui_dir.join("build"))
-            .arg(libui_dir)
-            .output()
-            .map_err(Error::RunPython)?;
+    pub enum Backend {
+        Msvc,
+        Ninja,
+        Xcode,
+    }
 
-        if out.status.success() {
+    impl Default for Backend {
+        fn default() -> Self {
+            if build_cfg!(feature = "build-with-msvc") {
+                Self::Msvc
+            } else if build_cfg!(feature = "build-with-xcode") {
+                Self::Xcode
+            // Ninja is last because it is the default option. This way, even if the user forgets to
+            // pass `--no-default-options` and both `build-with-ninja` and, e.g., `build-with-msvc`
+            // are enabled, only `build-with-msvc` will take effect, and the build backend will be
+            // MSVC.
+            } else if build_cfg!(feature = "build-with-ninja") {
+                Self::Ninja
+            } else {
+                panic!(
+                    "
+                    The `build` feature is enabled but no `build-with-*` feature is not enabled. \
+                    *libui-ng-sys* doesn't know which build backend to use. \
+                    "
+                );
+            }
+        }
+    }
+
+    impl Backend {
+        /// Builds *libui*.
+        pub fn build_libui(
+            self,
+            libui_dir: &Path,
+            meson_dir: &Path,
+            ninja_dir: &Path,
+        ) -> Result<(), Error> {
+            self.setup_libui(libui_dir, meson_dir).map_err(Error::SetupLibui)?;
+            self.build_libui_once_setup(libui_dir, meson_dir, ninja_dir)?;
+
+            // Meson unconditionally names the library "libui.a", which prevents MSVC's `link.exe`
+            // from finding it; we must manually rename it to "ui.lib".
+            if let Self::Msvc = self {
+                let build_dir = libui_dir.join("build/meson-out");
+                std::fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))
+                    .map_err(Error::RenameLibui)?;
+            }
+
             Ok(())
-        } else {
-            Err(Error::Python { out })
-        }
-    }
-
-    fn backend() -> &'static str {
-        if build_cfg!(target_os = "macos") {
-            todo!()
-        } else if build_cfg!(target_os = "linux") {
-            "ninja"
-        } else if build_cfg!(target_os = "windows") {
-            "vs"
-        } else {
-            unimplemented!("Unsupported target OS");
-        }
-    }
-
-    fn is_debug() -> bool {
-        !matches!(env::var("DEBUG").as_deref(), Ok("0" | "false"))
-    }
-
-    fn optimization() -> String {
-        let level = env::var("OPT_LEVEL").expect("$OPT_LEVEL is unset");
-        match level.as_str() {
-            // Meson doesn't support "-Oz"; we'll try the next-closest option.
-            "z" => String::from("s"),
-            _ => level,
-        }
-    }
-
-    pub fn build_libui(meson_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
-        let out = process::Command::new("python")
-            .arg(meson_dir.join("meson.py"))
-            .arg("compile")
-            .current_dir(libui_dir.join("build"))
-            .output()
-            .map_err(Error::RunPython)?;
-
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Python { out })
-        }
-    }
-}
-
-#[cfg(feature = "build")]
-mod ninja {
-    use std::{io, path::Path, process};
-
-    /// The error type returned by *ninja* functions.
-    #[derive(Debug)]
-    pub enum Error {
-        /// Failed to run Python.
-        RunPython(io::Error),
-        /// The process run by Python failed.
-        Python { out: process::Output },
-    }
-
-    /// Builds Ninja.
-    pub fn build(ninja_dir: &Path) -> Result<(), Error> {
-        if ninja_dir.join("ninja").exists() {
-            return Ok(());
         }
 
-        let out = std::process::Command::new("python3")
-            .arg("configure.py")
-            .arg("--bootstrap")
-            .current_dir(ninja_dir)
-            .output()
-            .map_err(Error::RunPython)?;
-
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Python { out })
+        /// Prepares *libui* to be built.
+        fn setup_libui(&self, libui_dir: &Path, meson_dir: &Path) -> Result<(), PythonError> {
+            Self::run_python(|cmd| {
+                cmd
+                    .arg(meson_dir.join("meson.py"))
+                    .arg("setup")
+                    .arg("--default-library=static")
+                    .arg("--buildtype=release")
+                    .arg(format!("--optimization={}", Self::optimization_level()))
+                    .arg(format!("--backend={}", self.as_str()))
+                    // It's OK that this option is hardcoded (which is MSVC-specific) for all
+                    // backends; Meson will simply ignore it if MSVC isn't the selected backend.
+                    .arg("-Db_vscrt=from_buildtype")
+                    .arg(libui_dir.join("build"))
+                    .arg(libui_dir);
+            })
         }
-    }
 
-    /// Builds *libui* with Ninja after configuration with Meson.
-    pub fn build_libui(ninja_dir: &Path, libui_dir: &Path) -> Result<(), Error> {
-        let out = std::process::Command::new(ninja_dir.join("ninja"))
-            .args(["-C", "build"])
-            .current_dir(libui_dir)
-            .output()
-            .map_err(Error::RunPython)?;
+        // This may be used at some point.
+        #[allow(dead_code)]
+        fn is_debug() -> bool {
+            !matches!(env::var("DEBUG").as_deref(), Ok("0" | "false"))
+        }
 
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Python { out })
+        fn optimization_level() -> String {
+            let level = env::var("OPT_LEVEL").expect("$OPT_LEVEL is unset");
+            match level.as_str() {
+                // Meson doesn't support "-Oz"; we'll try the next-closest option.
+                "z" => String::from("s"),
+                _ => level,
+            }
+        }
+
+        fn as_str(&self) -> &'static str {
+            match self {
+                Self::Msvc => "vs",
+                Self::Ninja => "ninja",
+                Self::Xcode => "xcode",
+            }
+        }
+
+        fn build_libui_once_setup(
+            &self,
+            libui_dir: &Path,
+            meson_dir: &Path,
+            ninja_dir: &Path,
+        ) -> Result<(), Error> {
+            if let Self::Ninja = self {
+                Self::build_ninja(ninja_dir).map_err(Error::BuildNinja)?;
+            }
+
+            Self::run_python(|cmd| {
+                cmd
+                    .arg(meson_dir.join("meson.py"))
+                    .arg("compile")
+                    // It's OK that this env. variable is hardcoded; Meson will ignore it if Ninja
+                    // isn't the selected backend.
+                    .env("NINJA", ninja_dir.join("ninja"))
+                    .current_dir(libui_dir.join("build"));
+            })
+            .map_err(Error::BuildLibui)
+        }
+
+        /// Builds Ninja.
+        fn build_ninja(ninja_dir: &Path) -> Result<(), PythonError> {
+            if ninja_dir.join("ninja").exists() {
+                // We'll give the benefit of the doubt that `ninja` is actually a complete, working
+                // binary and not just, e.g., an empty file.
+                return Ok(());
+            }
+
+            Self::run_python(|cmd| {
+                cmd
+                    .arg("configure.py")
+                    .arg("--bootstrap")
+                    .current_dir(ninja_dir);
+            })
+        }
+
+        fn run_python(f: impl Fn(&mut process::Command)) -> Result<(), PythonError> {
+            let mut cmd = process::Command::new("python3");
+            f(&mut cmd);
+
+            let out = cmd.output().map_err(PythonError::RunPython)?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(PythonError::Python { out })
+            }
         }
     }
 }
@@ -399,7 +415,8 @@ mod bindings {
                 .parse_callbacks(Box::new(bindgen::CargoCallbacks))
                 .allowlist_function(LIBUI_REGEX)
                 .allowlist_type(LIBUI_REGEX)
-                .allowlist_var(LIBUI_REGEX);
+                .allowlist_var(LIBUI_REGEX)
+                .blocklist_item("_bindgen.*");
 
             // Note: Virtually every wrapper except that for "ui.h" should blocklist "ui.h".
             if self.blocklists_main {
@@ -462,9 +479,9 @@ mod bindings {
     impl ClangArgs {
         fn new() -> Self {
             if build_cfg!(target_os = "macos") {
-                Self::new_darwin()
+                Self::new_macos()
             } else if build_cfg!(target_os = "linux") {
-                Self::new_unix()
+                Self::new_linux()
             } else if build_cfg!(target_os = "windows") {
                 Self::new_windows()
             } else {
@@ -472,15 +489,14 @@ mod bindings {
             }
         }
 
-        fn new_darwin() -> Self {
-            // TODO
+        fn new_macos() -> Self {
             Self {
                 defines: Vec::new(),
                 include_paths: Vec::new(),
             }
         }
 
-        fn new_unix() -> Self {
+        fn new_linux() -> Self {
             let gtk = pkg_config::Config::new()
                 .atleast_version("3.10.0")
                 .print_system_cflags(true)
