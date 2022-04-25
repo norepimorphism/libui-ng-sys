@@ -15,6 +15,7 @@ pub enum Error {
     /// Failed to build *libui*.
     #[cfg(feature = "build")]
     BuildLibui(build::Error),
+    /// Failed to include Windows resources.
     IncludeWinres(io::Error),
     /// Failed to generate bindings to *libui*.
     GenBindings(bindings::Error),
@@ -27,9 +28,9 @@ fn main() -> Result<(), Error> {
     let meson_dir = out_dir.join("meson");
     let ninja_dir = out_dir.join("ninja");
 
-    // Cargo will prevent this crate from being published if the build script modifies files
-    // outside `$OUT_DIR` during its operation. To work around this for the purpose of building
-    // *libui*, we copy all non-Rust build dependencies to `$OUT_DIR`.
+    // Cargo will prevent this crate from being published if the build script modifies files outside
+    // `$OUT_DIR` during its operation. To work around this for the purpose of building *libui*, we
+    // copy all non-Rust build dependencies to `$OUT_DIR`.
     dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
 
     #[cfg(feature = "build")]
@@ -62,14 +63,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Instruct Cargo to link to *libui*.
-    println!(
-        "cargo:rustc-link-lib={}=ui",
-        if cfg!(feature = "build") {
-            "static"
-        } else {
-            "dylib"
-        },
-    );
+    println!("cargo:rustc-link-lib={}=ui", link_kind());
 
     bindings::generate(&libui_dir, &out_dir).map_err(Error::GenBindings)?;
 
@@ -117,8 +111,15 @@ fn include_winres(libui_dir: &Path) -> io::Result<()> {
     let windows_dir = libui_dir.join("windows");
     winres::WindowsResource::new()
         .set_manifest_file(&windows_dir.join("libui.manifest").display().to_string())
-        .set_resource_file(&windows_dir.join("resources.rc").display().to_string())
         .compile()
+}
+
+fn link_kind() -> &'static str {
+    if cfg!(feature = "build") {
+        "static"
+    } else {
+        "dylib"
+    }
 }
 
 mod dep {
@@ -143,7 +144,7 @@ mod dep {
 }
 
 mod build {
-    use std::{env, fs, io, path::Path, process};
+    use std::{env, fs, io, path::{Path, PathBuf}, process};
 
     /// The error type returned by [`Backend`] functions.
     #[derive(Debug)]
@@ -152,8 +153,6 @@ mod build {
         SetupLibui(PythonError),
         /// Failed to build Ninja.
         BuildNinja(PythonError),
-        /// Failed to rename `ninja` to `ninja.exe`.
-        RenameNinja(io::Error),
         /// Failed to compile *libui*.
         CompileLibui(PythonError),
         /// Failed to rename `libui.a` to `ui.lib`.
@@ -207,48 +206,71 @@ mod build {
             meson_dir: &Path,
             ninja_dir: &Path,
         ) -> Result<(), Error> {
+            if Self::libui_path(libui_dir).exists() {
+                // We'll give the benefit of the doubt that this is actually a complete, working
+                // library.
+                return Ok(());
+            }
+
             if let Self::Ninja = self {
                 // This must precede setting up *libui* as Meson requires Ninja even in the
                 // configuration phase.
                 Self::build_ninja(ninja_dir).map_err(Error::BuildNinja)?;
-                Self::rename_ninja(ninja_dir).map_err(Error::RenameNinja)?;
             }
 
             self.setup_libui(libui_dir, meson_dir, ninja_dir).map_err(Error::SetupLibui)?;
             self.compile_libui(libui_dir, meson_dir, ninja_dir)
                 .map_err(Error::CompileLibui)?;
-            self.rename_libui(libui_dir).map_err(Error::RenameNinja)?;
+            self.rename_libui(libui_dir).map_err(Error::RenameLibui)?;
 
             Ok(())
+        }
+
+        fn libui_path(libui_dir: &Path) -> PathBuf {
+            libui_dir.join("libui.a")
+        }
+
+        fn ninja_path(ninja_dir: &Path) -> PathBuf {
+            let ext = env::consts::EXE_EXTENSION;
+            ninja_dir.join("ninja").with_extension(ext)
+        }
+
+        fn run_python(
+            f: impl Fn(&mut process::Command),
+            ninja_dir: Option<&Path>,
+        ) -> Result<(), PythonError> {
+            let mut cmd = process::Command::new("python3");
+            f(&mut cmd);
+
+            if let Some(dir) = ninja_dir {
+                cmd.env("NINJA", Self::ninja_path(dir));
+            }
+
+            let out = cmd.output().map_err(PythonError::RunPython)?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(PythonError::Python { out })
+            }
         }
 
         /// Builds Ninja.
         fn build_ninja(ninja_dir: &Path) -> Result<(), PythonError> {
-            if ninja_dir.join("ninja.exe").exists() {
-                // We'll give the benefit of the doubt that `ninja.exe` is actually a complete,
-                // working binary and not just, e.g., an empty file.
+            if Self::ninja_path(ninja_dir).exists() {
+                // We'll give the benefit of the doubt that this is actually a complete, working
+                // binary.
                 return Ok(());
             }
 
-            Self::run_python(|cmd| {
-                cmd
-                    .arg("configure.py")
-                    .arg("--bootstrap")
-                    .current_dir(ninja_dir);
-            })
-        }
-
-        fn rename_ninja(ninja_dir: &Path) -> Result<(), io::Error> {
-            // On Linux and macOS hosts, the binary is named `ninja`, while on Windows hosts, the
-            // binary is named `ninja.exe`. Furthermore, Windows detects executables by file
-            // extension whereas Unix systems do it by filesystem permissions. For these reasons, we
-            // normalize the Ninja executable name to `ninja.exe` for consistency.
-            let ninja_path = ninja_dir.join("ninja");
-            if ninja_path.exists() {
-                fs::rename(ninja_path, ninja_dir.join("ninja.exe"))?;
-            }
-
-            Ok(())
+            Self::run_python(
+                |cmd| {
+                    cmd
+                        .arg("configure.py")
+                        .arg("--bootstrap")
+                        .current_dir(ninja_dir);
+                },
+                None,
+            )
         }
 
         /// Prepares *libui* to be built.
@@ -258,23 +280,23 @@ mod build {
             meson_dir: &Path,
             ninja_dir: &Path,
         ) -> Result<(), PythonError> {
-            Self::run_python(|cmd| {
-                cmd
-                    .arg(meson_dir.join("meson.py"))
-                    .arg("setup")
-                    .arg("--default-library=static")
-                    .arg("--buildtype=release")
-                    .arg(format!("--optimization={}", Self::optimization_level()))
-                    .arg(format!("--backend={}", self.as_str()))
-                    // It's OK that this option is hardcoded (which is MSVC-specific) for all
-                    // backends; Meson will simply ignore it if MSVC isn't the selected backend.
-                    .arg("-Db_vscrt=from_buildtype")
-                    .arg(libui_dir.join("build"))
-                    .arg(libui_dir)
-                    // It's OK that this env. variable is hardcoded; Meson will ignore it if Ninja
-                    // isn't the selected backend.
-                    .env("NINJA", ninja_dir.join("ninja.exe"));
-            })
+            Self::run_python(
+                |cmd| {
+                    cmd
+                        .arg(meson_dir.join("meson.py"))
+                        .arg("setup")
+                        .arg("--default-library=static")
+                        .arg("--buildtype=release")
+                        .arg(format!("--optimization={}", Self::optimization_level()))
+                        .arg(format!("--backend={}", self.as_str()))
+                        // It's OK that this option is hardcoded (which is MSVC-specific) for all
+                        // backends; Meson will simply ignore it if MSVC isn't the selected backend.
+                        .arg("-Db_vscrt=from_buildtype")
+                        .arg(libui_dir.join("build"))
+                        .arg(libui_dir);
+                },
+                Some(ninja_dir),
+            )
         }
 
         // This may be used at some point.
@@ -306,25 +328,15 @@ mod build {
             meson_dir: &Path,
             ninja_dir: &Path,
         ) -> Result<(), PythonError> {
-            Self::run_python(|cmd| {
-                cmd
-                    .arg(meson_dir.join("meson.py"))
-                    .arg("compile")
-                    .arg(format!("-C={}", libui_dir.join("build").display()))
-                    .env("NINJA", ninja_dir.join("ninja.exe"));
-            })
-        }
-
-        fn run_python(f: impl Fn(&mut process::Command)) -> Result<(), PythonError> {
-            let mut cmd = process::Command::new("python3");
-            f(&mut cmd);
-
-            let out = cmd.output().map_err(PythonError::RunPython)?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err(PythonError::Python { out })
-            }
+            Self::run_python(
+                |cmd| {
+                    cmd
+                        .arg(meson_dir.join("meson.py"))
+                        .arg("compile")
+                        .arg(format!("-C={}", libui_dir.join("build").display()));
+                },
+                Some(ninja_dir),
+            )
         }
 
         fn rename_libui(&self, libui_dir: &Path) -> Result<(), io::Error> {
@@ -332,7 +344,7 @@ mod build {
             // from finding it; we must manually rename it to "ui.lib".
             if let Self::Msvc = self {
                 let build_dir = libui_dir.join("build/meson-out");
-                fs::rename(build_dir.join("libui.a"), build_dir.join("ui.lib"))?;
+                fs::rename(Self::libui_path(libui_dir), build_dir.join("ui.lib"))?;
             }
 
             Ok(())
@@ -544,7 +556,7 @@ mod bindings {
             let include_paths = gtk
                 .include_paths
                 .into_iter()
-                .map(|path| format!("{}", path.display()))
+                .map(|path| path.display().to_string())
                 .collect();
 
             Self {
