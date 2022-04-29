@@ -8,12 +8,16 @@ fn main() {
         let mut options = uiInitOptions { Size: 0 };
         uiInit(ptr::addr_of_mut!(options));
 
+        let file_menu_name = ffi::CString::new("File").unwrap();
+        let file_menu = uiNewMenu(file_menu_name.as_ptr());
+        uiMenuAppendQuitItem(file_menu);
+
         let window_name = ffi::CString::new("libui-ng-sys").unwrap();
-        let window = uiNewWindow(window_name.as_ptr(), 200, 40, 0);
+        let window = uiNewWindow(window_name.as_ptr(), 200, 40, 1);
         uiWindowSetResizeable(window, 0);
         uiWindowSetMargined(window, 1);
-        uiWindowOnClosing(window, Some(close_window), ptr::null_mut());
-        uiOnShouldQuit(Some(quit_ui), window.cast());
+        uiWindowOnClosing(window, Some(window_on_closing), ptr::null_mut());
+        uiOnShouldQuit(Some(on_ui_should_quit), window.cast());
 
         let button_text = ffi::CString::new("Lorem Ipsum").unwrap();
         let button = uiNewButton(button_text.as_ptr());
@@ -31,12 +35,12 @@ fn main() {
     }
 }
 
-unsafe extern "C" fn close_window(_: *mut uiWindow, _: *mut c_void) -> i32 {
+unsafe extern "C" fn window_on_closing(_: *mut uiWindow, _: *mut c_void) -> i32 {
     uiQuit();
     0
 }
 
-unsafe extern "C" fn quit_ui(window: *mut c_void) -> i32 {
+unsafe extern "C" fn on_ui_should_quit(window: *mut c_void) -> i32 {
     uiControlDestroy(window.cast());
     1
 }

@@ -57,8 +57,8 @@ fn main() -> Result<(), Error> {
         // linker) which shared objects we need.
         import_dylibs();
 
-        if build_cfg!(target_os = "windows") {
-            include_winres(&libui_dir).map_err(Error::IncludeWinres)?;
+        if build_cfg!(target_os = "windows") && cfg!(feature = "include-win-manifest") {
+            include_winres().map_err(Error::IncludeWinres)?;
         }
     }
 
@@ -107,10 +107,9 @@ fn import_dylibs() {
     }
 }
 
-fn include_winres(libui_dir: &Path) -> io::Result<()> {
-    let windows_dir = libui_dir.join("windows");
+fn include_winres() -> io::Result<()> {
     winres::WindowsResource::new()
-        .set_manifest_file(&windows_dir.join("libui.manifest").display().to_string())
+        .set_manifest_file(&Path::new("res/libui.manifest").display().to_string())
         .compile()
 }
 

@@ -4,7 +4,7 @@
 
 [package]
 name = "libui-ng-sys"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["norepimorphism <norepi@protonmail.com>"]
 edition = "2021"
 description = "Bindings to libui-ng"
@@ -20,7 +20,8 @@ build-ninja = ["build-with-ninja"]
 build-with-msvc = ["build"]
 build-with-ninja = ["build"]
 build-with-xcode = ["build"]
-default = ["build-ninja"]
+default = ["build-ninja", "include-win-manifest"]
+include-win-manifest = ["build"]
 
 [package.metadata.docs.rs]
 no-default-features = true
