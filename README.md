@@ -71,7 +71,7 @@ This feature implies `build`. When `build-with-xcode` is enabled, *libui-ng* is 
 
 When the `build` feature is enabled, *libui-ng-sys* requires *libui-ng*, Meson, and possibly Ninja as dependencies, but Rust crates do not exist for them yet. To work around this, these are included as Git submodules. The latest commit hashes of the submodules are documented below for each version of *libui-ng-sys*.
 
-### 0.2.0&ndash;0.4.2
+### 0.2.0&ndash;0.4.3
 
 | Dependency | Commit Hash                                |
 | ---------- | ------------------------------------------ |
