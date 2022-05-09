@@ -34,7 +34,7 @@ fn main() -> Result<(), Error> {
     dep::sync("libui-ng", &libui_dir).map_err(Error::SyncDep)?;
 
     #[cfg(feature = "build")]
-    {
+    if env::var("DOCS_RS").is_err() {
         let backend = build::Backend::default();
 
         dep::sync("meson", &meson_dir).map_err(Error::SyncDep)?;
