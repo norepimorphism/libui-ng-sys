@@ -139,7 +139,7 @@ mod repo {
     }
 
     pub fn refetch_submodule(submodule_name: &str) -> Result<(), Error> {
-        let repo = git2::Repository::open("").map_err(Error::Open)?;
+        let repo = git2::Repository::open(".").map_err(Error::Open)?;
 
         let mut submods = repo
             .submodules()
