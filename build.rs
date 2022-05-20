@@ -130,8 +130,11 @@ fn link_kind() -> &'static str {
 }
 
 mod repo {
+    use std::{env, io};
+
     #[derive(Debug)]
     pub enum Error {
+        ReadCurrentDir(io::Error),
         Open(git2::Error),
         ReadSubmodules(git2::Error),
         SubmoduleNotFound,
@@ -139,7 +142,8 @@ mod repo {
     }
 
     pub fn refetch_submodule(submodule_name: &str) -> Result<(), Error> {
-        let repo = git2::Repository::open(".").map_err(Error::Open)?;
+        let repo_path = env::current_dir().map_err(Error::ReadCurrentDir)?;
+        let repo = git2::Repository::open(repo_path).map_err(Error::Open)?;
 
         let mut submods = repo
             .submodules()
