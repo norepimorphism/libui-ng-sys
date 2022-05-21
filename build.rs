@@ -12,8 +12,7 @@ use std::{env, io, path::{Path, PathBuf}};
 pub enum Error {
     /// Failed to [sync](`dep::sync`) dependencies.
     SyncDep(anyhow::Error),
-    /// Failed to [re-fetch](`repo::refetch_submodule`) a Git submodule.
-    RefetchSubmodule(repo::Error),
+    SetPermissions(io::Error),
     /// Failed to build *libui*.
     #[cfg(feature = "build")]
     BuildLibui(build::Error),
@@ -44,9 +43,9 @@ fn main() -> Result<(), Error> {
         if let build::Backend::Ninja = backend {
             // When downloading crates from *crates.io*, file execute permissions are *not*
             // respected. This is a problem for Ninja, which attempts to execute a file named
-            // *inline.sh*. Re-fetching the submodule locally in entirety is a future-proof
-            // solution to this issue, albeit slightly inefficient.
-            repo::refetch_submodule("dep/ninja").map_err(Error::RefetchSubmodule)?;
+            // *inline.sh*. For this reason, we manually mark it as executable.
+            #[cfg(unix)]
+            mark_executable("dep/ninja/src/inline.sh");
 
             dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
         }
@@ -79,6 +78,13 @@ fn main() -> Result<(), Error> {
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())
+}
+
+#[cfg(all(feature = "build", unix))]
+fn mark_executable(path: impl AsRef<Path>) -> Result<(), Error> {
+    use std::{fs, os::unix::fs::PermissionsExt as _};
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(Error::SetPermissions)
 }
 
 #[cfg(feature = "build")]
@@ -126,38 +132,6 @@ fn link_kind() -> &'static str {
         "static"
     } else {
         "dylib"
-    }
-}
-
-mod repo {
-    use std::{env, io};
-
-    #[derive(Debug)]
-    pub enum Error {
-        ReadCurrentDir(io::Error),
-        Open(git2::Error),
-        ReadSubmodules(git2::Error),
-        SubmoduleNotFound,
-        UpdateSubmodule(git2::Error),
-    }
-
-    pub fn refetch_submodule(submodule_name: &str) -> Result<(), Error> {
-        let repo_path = env::current_dir().map_err(Error::ReadCurrentDir)?;
-        let repo = git2::Repository::open(repo_path).map_err(Error::Open)?;
-
-        let mut submods = repo
-            .submodules()
-            .map_err(Error::ReadSubmodules)?;
-        let submod = submods
-            .iter_mut()
-            .find(|submod| submod.name_bytes() == submodule_name.as_bytes())
-            .ok_or(Error::SubmoduleNotFound)?;
-
-        let mut update_opts = git2::SubmoduleUpdateOptions::new();
-        update_opts.allow_fetch(true);
-        submod.update(false, Some(&mut update_opts)).map_err(Error::UpdateSubmodule)?;
-
-        Ok(())
     }
 }
 
