@@ -45,7 +45,7 @@ fn main() -> Result<(), Error> {
             // respected. This is a problem for Ninja, which attempts to execute a file named
             // *inline.sh*. For this reason, we manually mark it as executable.
             #[cfg(unix)]
-            mark_executable("dep/ninja/src/inline.sh");
+            mark_executable("dep/ninja/src/inline.sh")?;
 
             dep::sync("ninja", &ninja_dir).map_err(Error::SyncDep)?;
         }
